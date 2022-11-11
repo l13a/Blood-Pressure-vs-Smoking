@@ -1,0 +1,1068 @@
+---
+title: "302 Final Project"
+author: "Lisa"
+date: "08/06/2021"
+output:
+  beamer_presentation: default
+  ioslides_presentation: default
+---
+
+```{r}
+knitr::opts_chunk$set(echo = FALSE)
+
+## If the package is not already installed then use 
+library(tidyverse)
+library(NHANES)
+library(xtable)
+library(car)
+library(glmnet)
+library(rms)
+library(MASS)
+```
+
+```{r}
+rm(list = ls())
+small.nhanes <- na.omit(NHANES[NHANES$SurveyYr=="2011_12"
+& NHANES$Age > 17,c(1,3,4,8:11,13,17,20,21,25,46,50,51,52,61)]) 
+small.nhanes <- as.data.frame(small.nhanes %>%
+group_by(ID) %>% filter(row_number()==1) )
+nrow(small.nhanes)
+## Checking whether there are any ID that was repeated. If not ##
+## then length(unique(small.nhanes$ID)) and nrow(small.nhanes) are same 
+length(unique(small.nhanes$ID))
+
+
+## Create training and test set ##
+set.seed(1005825136)
+train <- small.nhanes[sample(seq_len(nrow(small.nhanes)), size = 500),] 
+nrow(train)
+length(which(small.nhanes$ID %in% train$ID))
+test <- small.nhanes[!small.nhanes$ID %in% train$ID,]
+nrow(test)
+train <-train[order(train$ID),]
+```
+
+
+##Assumption Checks
+```{r}
+## The full model ##
+model.full <- lm(BPSysAve ~ ., data = train[, -c(1)])
+################Assumption Checks######################## 
+resid <- rstudent(model.full)
+fitted <- predict(model.full)
+#normality assumption
+qqnorm(resid)
+qqline(resid)
+
+#Standard Residuals v.s. Fitted Values Plot for Homoscedasticity and Independence
+plot(resid ~ fitted, type = "p", xlab = "Fitted Values", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "red")
+lines(lowess(fitted, resid), col = "blue")
+
+
+#Standard Residuals v.s. All continuous Predictors
+par(mfrow=c(2,3))
+plot(resid ~ train$Age, type = "p", xlab = "Age", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Age, resid), col = "blue")
+
+plot(resid ~ train$Poverty, type = "p", xlab = "Poverty", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Poverty, resid), col = "blue")
+
+plot(resid ~ train$Weight, type = "p", xlab = "Weight", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Weight, resid), col = "blue")
+
+plot(resid ~ train$Height, type = "p", xlab = "Height", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Height, resid), col = "blue")
+
+plot(resid ~ train$BMI, type = "p", xlab = "BMI", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$BMI, resid), col = "blue")
+
+plot(resid ~ train$SleepHrsNight, type = "p", xlab = "SleepHrsNight", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$SleepHrsNight, resid), col = "blue")
+
+
+#Response v.s. Fitted Values plot for potential transformation choices
+plot(train$BPSysAve ~ fitted, type = "p", xlab = "Fitted Values", 
+     ylab = "BPSysAve", cex.lab = 1.2,
+     col = "red")
+abline(lm(train$BPSysAve ~ fitted), lwd = 2, col = "blue")
+lines(lowess(fitted, train$BPSysAve), col = "red")
+#seems that the response has a linear relationship with the predictor space, so no need for transformation
+
+#Diagnosis Plots by R of full model
+par(mfrow = c(2, 2))
+plot(model.full)
+#normality kinda violated at the ends, there are outliers (high cooks and leverage)
+
+```
+## Scatterplot Matrix
+```{r}
+#scatterplot matrix
+smoker<-factor(train$SmokeNow,c("Yes", "No"),labels=c("Smoking Now","Not Smoking Now"))
+pairs(~ BPSysAve + Age + Poverty + Weight + Height + BMI + SleepHrsNight, data = train, main = "BPSysAve Scatterplot Matrix", col=c("red","blue")[smoker],pch=c(1,4)[smoker])
+par(xpd = TRUE)
+legend( "bottomright", fill = c("red","blue"), 
+       legend = c("Smoking Now","Not Smoking Now"))
+```
+
+
+## Model Diagnosis
+```{r}
+################Leverage######################## 
+## The full model ##
+model.full <- lm(BPSysAve ~ ., data = train[, -c(1)])
+
+## The hat values ###
+h <- hatvalues(model.full)
+thresh <- 2 * (dim(model.matrix(model.full))[2])/nrow(train)
+w <- which(h > thresh)
+w
+train[w,]
+```
+```{r}
+################Standard Residuals######################## 
+residuals.full <- rstudent(model.full)
+r <- which(residuals.full <= -2 | residuals.full >= 2)
+r
+```
+
+```{r}
+################Influential Points######################## 
+D <- cooks.distance(model.full)
+which(D > qf(0.5, ncol(train), nrow(train) - ncol(train)))
+#no influential points by cooks
+
+## DFFITS ##
+dfits <- dffits(model.full)
+dff <- which(abs(dfits) > 2*sqrt(ncol(train)/nrow(train)))
+length(dff)
+train[dff,]
+#79 influential points by DFFITS
+
+## DFBETAS ##
+dfb <- dfbetas(model.full)
+dfb <- which(abs(dfb[,1]) > 2/sqrt(nrow(train)))
+length(dfb)
+train[dfb,]
+#34 influential points by DFBETAS
+
+```
+
+
+
+```{r}
+#initial full model ANOVA Test
+summary(model.full)
+#F test is really significant with only 2 significant predictors Age and I(Gender = Male)
+```
+
+### Correlation
+
+
+```{r}
+#Correlated Predictors (continuous predictors only)
+cor(data.frame(train$BPSysAve, train$Age, train$Poverty, train$Weight, train$Height, train$BMI, train$SleepHrsNight))
+
+
+#scatterplot matrix
+smoker<-factor(train$SmokeNow,c("Yes", "No"),labels=c("Smoking Now","Not Smoking Now"))
+pairs(~ BPSysAve + Age + Poverty + Weight + Height + BMI + SleepHrsNight, data = train, main = "BPSysAve Scatterplot Matrix", col=c("red","blue")[smoker],pch=c(1,4)[smoker])
+```
+
+
+## Checking for VIF
+
+```{r}
+#check variance inflation factors for the preditors
+model <- lm(BPSysAve ~ Age + Poverty + Weight + Height + BMI + SleepHrsNight, data = train)
+summary(model)
+#Weight, Height, BMI, and SleepHrsNight not very significant
+#age, poverty are significant by this model
+vif(model)
+
+```
+
+```{r}
+#fit the model again 
+model <- lm(BPSysAve ~ Age + Poverty + Weight + Height + SleepHrsNight, data = train)
+summary(model)
+#F test still really significant, now Age, Poverty, and Weight are significant 
+vif(model)
+#now all predictors have VIF < 5 
+
+```
+
+## Variable Selection
+
+```{r}
+
+################Stepwise Selection######################## 
+## Based on AIC ##
+model.step <- lm(BPSysAve ~ ., data = train[, -c(1)]) #include all variables in data except the firstcol
+n <- nrow(train)
+sel.var.aic <- step(model.step, trace = 0, k = 2, direction = "both")
+select_var.aic<-attr(terms(sel.var.aic), "term.labels")   
+select_var.aic
+
+
+## Based on BIC ##
+model.step <- lm(BPSysAve ~ ., data = train[, -c(1)]) #include all variables in data except the firstcol
+n <- nrow(train)
+sel.var.bic <- step(model.step, trace = 0, k = log(n), direction = "both")
+select_var.bic<-attr(terms(sel.var.bic), "term.labels")   
+select_var.bic
+```
+```{r}
+############# LASSO selection for variable selection ###########3##
+
+## Perform cross validation to choose lambda ##
+set.seed(1005825136) #for cross validation so that don't come up with different lamdas
+cv.out <- cv.glmnet(x = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train), y = train$BPSysAve, standardize = T, alpha = 1)
+plot(cv.out)
+best.lambda <- cv.out$lambda.1se #get best lamda
+best.lambda
+co<-coef(cv.out, s = "lambda.1se") #gives the summary of the variables included in the model with lasso selection
+
+#Selection of the significant features(predictors)
+
+## threshold for variable selection ##
+thresh <- 0.0
+# select variables #
+inds<-which(abs(co) > thresh )
+variables<-row.names(co)[inds]
+sel.var.lasso<-variables[!(variables %in% '(Intercept)')]
+sel.var.lasso #selected variable names from co using lasso selection
+```
+
+
+## Shrinkage Methods & Prediction Error
+```{r}
+################Full Model######################## 
+## Prediction error ##
+pred.y <- predict(model.full, newdata = test, type = "response")
+mean((test$BPSysAve - pred.y)^2)
+```
+
+```{r}
+################Ridge########################
+#alpha = 0 means ridge penalty
+model.ridge <- glmnet(x = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train), y = train$BPSysAve, standardize = T, alpha = 0) 
+
+## Perform Prediction ##
+pred.y.ridge <- predict(model.ridge, newx = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test), type = "response")
+
+## Prediction error ##
+mean((test$BPSysAve - pred.y.ridge)^2)
+```
+
+```{r}
+################LASSO########################
+model.lasso <- glmnet(x = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train), y = train$BPSysAve, standardize = T, alpha = 1) 
+
+## Perform Prediction ##
+pred.y.lasso <- predict(model.lasso, newx = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test), type = "response")
+
+## Prediction error ##
+mean((test$BPSysAve - pred.y.lasso)^2) #lowest prediction error
+```
+
+```{r}
+################Elastic Net########################
+model.EN <- glmnet(x = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train), y = train$BPSysAve, standardize = T, alpha = 0.5) 
+
+## Perform Prediction ##
+pred.y.EN <- predict(model.EN, newx = model.matrix(~Gender + Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test), type = "response")
+
+## Prediction error ##
+mean((test$BPSysAve - pred.y.EN)^2)
+
+```
+Prediction Error lowest for LASSO model so far.
+
+## Model Validation & Prediction Error
+```{r}
+### Cross Validation and prediction performance of AIC based selection ###
+ols.aic <- ols(BPSysAve ~ ., data = train[,which(colnames(train) %in% c(select_var.aic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+aic.cross <- calibrate(ols.aic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(aic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with AIC")
+
+## Test Error ##
+pred.aic <- predict(ols.aic, newdata = test[,which(colnames(train) %in% c(select_var.aic, "BPSysAve"))])
+## Prediction error ##
+pred.error.AIC <- mean((test$BPSysAve - pred.aic)^2)
+pred.error.AIC
+```
+Predicted pretty well. Prediction Error smallest now.
+
+```{r}
+### Cross Validation and prediction performance of BIC based selection ###
+ols.bic <- ols(BPSysAve ~ ., data = train[,which(colnames(train) %in% c(select_var.bic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+bic.cross <- calibrate(ols.bic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(bic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with BIC")
+
+## Test Error ##
+pred.bic <- predict(ols.bic, newdata = test[,which(colnames(train) %in% c(select_var.bic, "BPSysAve"))])
+## Prediction error ##
+pred.error.BIC <- mean((test$BPSysAve - pred.bic)^2)
+pred.error.BIC
+
+```
+Have approximately the same predictive power in model validation as the one with AIC.
+
+```{r}
+### Cross Validation and prediction performance of lasso based selection ###
+ols.lasso <- ols(BPSysAve ~ ., data = train[,which(colnames(train) %in% c(sel.var.lasso, "BPSysAve"))], 
+                 x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+lasso.cross <- calibrate(ols.lasso, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(lasso.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with LASSO")
+
+## Test Error ##
+pred.lasso <- predict(ols.lasso, newdata = test[,which(colnames(train) %in% c(sel.var.lasso, "BPSysAve"))])
+## Prediction error ##
+pred.error.lasso <- mean((test$BPSysAve - pred.lasso)^2)
+pred.error.lasso
+
+print(c(pred.error.AIC, pred.error.BIC, pred.error.lasso))
+
+```
+Cross-Validation plot looks the worst of all three. Prediction Error smallest so far for LASSO. 
+
+
+## Select Model & explain the parameter estimates
+Since we are interested in the prediction only, we should choose the model with the lowest prediction error. That is, we fit the model obtained by the LASSO Shrinkage Method:
+```{r}
+model.final <- lm(BPSysAve ~ Age, data = train) 
+summary(model.final)
+
+#manually add the SmokeNow variable in
+model.final.smoke <- lm(BPSysAve ~ Age + as.factor(SmokeNow), data = train) 
+summary(model.final.smoke)
+```
+The cross-validation shows best for BIC, we can fit that model for comparison too. 
+```{r}
+model.final2 <- lm(BPSysAve ~ as.factor(Gender) + Age + Weight + Height, data = train) 
+summary(model.final2)
+
+model.final2.smoke <- lm(BPSysAve ~ as.factor(Gender) + Age + Weight + Height + as.factor(SmokeNow), data = train) 
+summary(model.final2.smoke)
+```
+
+```{r}
+#Check Assumptions again 
+#Diagnosis Plots by R of full model
+par(mfrow = c(2, 2))
+plot(model.final)
+
+par(mfrow = c(2, 2))
+plot(model.final2)
+```
+
+## Conclusion 
+- As you increase 1 year of age, your BPSysAve will increase by around 0.46. 
+
+
+## Association between SmokeNow and BPSysAve
+```{r}
+library(plyr)    
+library(ggplot2)
+
+qplot(as.factor(SmokeNow), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve for Smokers v.s. Non-Smokers",xlab="Smoke?", ylab="BPSysAve")
+
+ggplot(train, main="Box Plot for BPSysAve for Smokers v.s. Non-Smokers divided by Gender" , xlab="Smoke?" , ylab="BPSysAve", aes(x=as.factor(Gender), y=BPSysAve, fill=Gender)) + geom_boxplot() + facet_grid(~as.factor(SmokeNow)) + scale_fill_brewer(palette = "Set1") 
+```
+
+## Divide by Gender and Remove Unimportant Variables and try again??
+
+First, we remove the outliers according to DFBETAS and outliers as shown above. 
+```{r}
+train <- train[-dfb,]
+train <- train[-match(62727, train$ID), ]
+model.full <- lm(BPSysAve ~ ., data = train[, -c(1)])
+```
+
+```{r}
+####Assumption Checks########
+resid <- rstudent(model.full)
+fitted <- predict(model.full)
+#normality assumption
+qqnorm(resid)
+qqline(resid)
+
+#Standard Residuals v.s. Fitted Values Plot for Homoscedasticity and Independence
+plot(resid ~ fitted, type = "p", xlab = "Fitted Values", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "red")
+lines(lowess(fitted, resid), col = "blue")
+#seem to be deviation from normal and a little fan out pattern in the residual plots
+
+
+#Standard Residuals v.s. All continuous Predictors
+par(mfrow=c(2,3))
+plot(resid ~ train$Age, type = "p", xlab = "Age", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Age, resid), col = "blue")
+
+plot(resid ~ train$Poverty, type = "p", xlab = "Poverty", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Poverty, resid), col = "blue")
+
+plot(resid ~ train$Weight, type = "p", xlab = "Weight", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Weight, resid), col = "blue")
+
+plot(resid ~ train$Height, type = "p", xlab = "Height", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$Height, resid), col = "blue")
+
+plot(resid ~ train$BMI, type = "p", xlab = "BMI", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$BMI, resid), col = "blue")
+
+plot(resid ~ train$SleepHrsNight, type = "p", xlab = "SleepHrsNight", 
+     ylab = "Standardized Residual", cex.lab = 1.2,
+     col = "#009999")
+lines(lowess(train$SleepHrsNight, resid), col = "blue")
+#each of the plots show random pattern -> model.full seem to do be a good model (although the categorical vars aren't really explored yet)
+
+
+
+#Response v.s. Fitted Values plot for potential transformation choices
+plot(train$BPSysAve ~ fitted, type = "p", xlab = "Fitted Values", 
+     ylab = "BPSysAve", cex.lab = 1.2,
+     col = "red")
+abline(lm(train$BPSysAve ~ fitted), lwd = 2, col = "blue")
+lines(lowess(fitted, train$BPSysAve), col = "red")
+#seems that the response has a linear relationship with the predictor space, so no need for transformation
+
+#Diagnosis Plots by R of full model
+par(mfrow = c(2, 2))
+plot(model.full)
+
+```
+We can then examine certain inconsequential variables and remove them. We can also remove multicollinearity variables.
+- ID we can remove
+- Education
+- Race3
+- MaritalStatus
+- HHIncome
+```{r}
+par(mfrow = c(2, 2))
+qplot(as.factor(Education), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. Education",xlab="Education", ylab="BPSysAve")
+qplot(as.factor(Race3), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. Race",xlab="Race", ylab="BPSysAve")
+qplot(as.factor(MaritalStatus), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. Marital Status",xlab="Marital Status", ylab="BPSysAve")
+qplot(as.factor(HHIncome), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. HHIncome",xlab="HHIncome", ylab="BPSysAve")
+```
+For the sake of comparison, let's plot the boxplots for the other categorical variables for which we think there is an influence.
+```{r}
+qplot(as.factor(Depressed), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. Depression Level",xlab="Depression Level", ylab="BPSysAve")
+qplot(as.factor(SleepTrouble), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. Sleep Trouble",xlab="Sleep Trouble", ylab="BPSysAve")
+qplot(as.factor(PhysActive), BPSysAve, data=train, geom=("boxplot"), 
+                   main="Box Plot for BPSysAve v.s. Physically Activeness",xlab="Physically Activeness", ylab="BPSysAve")
+```
+
+We divde the training and testing data by Gender:
+```{r}
+train.male <- filter(train, Gender == "male")
+train.female <- filter(train, Gender == "female")
+
+test.male <- filter(test, Gender == "male")
+test.female <- filter(test, Gender == "female")
+```
+
+We fit with train.male first:
+```{r}
+################Stepwise Selection######################## 
+## Based on AIC ##
+model.step <- lm(BPSysAve ~ Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.male) #include all variables in data except the firstcol and second col
+n <- nrow(train.male)
+sel.var.aic <- step(model.step, trace = 0, k = 2, direction = "both")
+select_var.aic<-attr(terms(sel.var.aic), "term.labels")   
+select_var.aic
+
+
+## Based on BIC ##
+model.step <- lm(BPSysAve ~ Age +  Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + Depressed + BMI + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.male)
+n <- nrow(train.male)
+sel.var.bic <- step(model.step, trace = 0, k = log(n), direction = "both")
+select_var.bic<-attr(terms(sel.var.bic), "term.labels")   
+select_var.bic
+```
+
+```{r}
+############# LASSO selection for variable selection ###########3##
+
+## Perform cross validation to choose lambda ##
+set.seed(1005825136) #for cross validation so that don't come up with different lamdas
+cv.out <- cv.glmnet(x = model.matrix(~ Age +  Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.male), y = train.male$BPSysAve, standardize = T, alpha = 1)
+plot(cv.out)
+best.lambda <- cv.out$lambda.1se #get best lamda
+best.lambda
+co<-coef(cv.out, s = "lambda.1se") #gives the summary of the variables included in the model with lasso selection
+
+#Selection of the significant features(predictors)
+
+## threshold for variable selection ##
+thresh <- 0.0
+# select variables #
+inds<-which(abs(co) > thresh )
+variables<-row.names(co)[inds]
+sel.var.lasso<-variables[!(variables %in% '(Intercept)')]
+sel.var.lasso #selected variable names from co using lasso selection
+```
+
+
+## Shrinkage Methods & Prediction Error
+```{r}
+################Full Model######################## 
+model.full <- lm(BPSysAve ~ ., data = train.male[, -c(1,2)])
+summary(model.full)
+## Prediction error ##
+pred.y <- predict(model.full, newdata = test.male, type = "response")
+pred.full.error <- mean((test.male$BPSysAve - pred.y)^2)
+pred.full.error
+
+################Selected Model Prior to Variable Selection######################## 
+model.select <- lm(BPSysAve ~ Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.male)
+summary(model.select)
+## Prediction error ##
+pred.y <- predict(model.select, newdata = test.male, type = "response")
+mean((test.male$BPSysAve - pred.y)^2)
+
+```
+
+```{r}
+################Ridge########################
+#alpha = 0 means ridge penalty
+model.ridge <- glmnet(x = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.male), y = train.male$BPSysAve, standardize = T, alpha = 0) 
+
+## Perform Prediction ##
+pred.y.ridge <- predict(model.ridge, newx = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test.male), type = "response")
+
+## Prediction error ##
+pred.error.ridge <- mean((test.male$BPSysAve - pred.y.ridge)^2)
+pred.error.ridge
+```
+
+```{r}
+################LASSO########################
+model.lasso <- glmnet(x = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.male), y = train.male$BPSysAve, standardize = T, alpha = 1) 
+
+## Perform Prediction ##
+pred.y.lasso <- predict(model.lasso, newx = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test.male), type = "response")
+
+## Prediction error ##
+pred.error.lasso <- mean((test.male$BPSysAve - pred.y.lasso)^2) #lowest prediction error
+pred.error.lasso
+```
+
+```{r}
+################Elastic Net########################
+model.EN <- glmnet(x = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.male), y = train.male$BPSysAve, standardize = T, alpha = 0.5) 
+
+## Perform Prediction ##
+pred.y.EN <- predict(model.EN, newx = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test.male), type = "response")
+
+## Prediction error ##
+pred.error.en <- mean((test.male$BPSysAve - pred.y.EN)^2)
+pred.error.en
+```
+Prediction Error lowest for Elastic Net model so far.
+
+## Model Validation & Prediction Error
+```{r}
+### Cross Validation and prediction performance of AIC based selection ###
+ols.aic <- ols(BPSysAve ~ ., data = train.male[,which(colnames(train.male) %in% c(select_var.aic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+aic.cross <- calibrate(ols.aic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(aic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with AIC")
+
+## Test Error ##
+pred.aic <- predict(ols.aic, newdata = test.male[,which(colnames(train.male) %in% c(select_var.aic, "BPSysAve"))])
+## Prediction error ##
+pred.error.AIC <- mean((test.male$BPSysAve - pred.aic)^2)
+pred.error.AIC
+```
+Predicted pretty well.
+
+```{r}
+### Cross Validation and prediction performance of BIC based selection ###
+ols.bic <- ols(BPSysAve ~ ., data = train.male[,which(colnames(train.male) %in% c(select_var.bic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+bic.cross <- calibrate(ols.bic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(bic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with BIC")
+
+## Test Error ##
+pred.bic <- predict(ols.bic, newdata = test.male[,which(colnames(train.male) %in% c(select_var.bic, "BPSysAve"))])
+## Prediction error ##
+pred.error.BIC <- mean((test.male$BPSysAve - pred.bic)^2)
+pred.error.BIC
+
+```
+Have approximately the same predictive power in model validation as the one with AIC.
+
+```{r}
+### Cross Validation and prediction performance of lasso based selection ###
+ols.lasso <- ols(BPSysAve ~ ., data = train.male[,which(colnames(train.male) %in% c(sel.var.lasso, "BPSysAve"))], 
+                 x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+lasso.cross <- calibrate(ols.lasso, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(lasso.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with LASSO")
+
+## Test Error ##
+pred.lasso <- predict(ols.lasso, newdata = test.male[,which(colnames(train.male) %in% c(sel.var.lasso, "BPSysAve"))])
+## Prediction error ##
+pred.error.lasso <- mean((test.male$BPSysAve - pred.lasso)^2)
+pred.error.lasso
+
+print(c(pred.error.AIC, pred.error.BIC, pred.error.lasso))
+
+```
+```{r}
+string <- "All Predictors except ID"
+tab <- matrix(c(toString(select_var.aic), pred.error.AIC, toString(select_var.bic), pred.error.BIC, toString(sel.var.lasso), pred.error.lasso, string, pred.full.error), ncol=2, byrow=TRUE) 
+colnames(tab) <- c('Selected Variables', 'Prediction Error') 
+rownames(tab) <- c("Stepwise Selection by AIC", "Stepwise Selection by BIC", "LASSO", "Full Model")
+tab <- as.table(tab)
+tab
+
+```
+```{r}
+tab <- matrix(c(pred.error.ridge, pred.error.lasso, pred.error.en), ncol=1, byrow=TRUE) 
+colnames(tab) <- c('Prediction Error') 
+rownames(tab) <- c("Ridge", "LASSO", "Elastic Net (alpha = 0.5)")
+tab <- as.table(tab)
+tab
+
+```
+
+```{r}
+model.final <- lm(BPSysAve ~ Age, data = train.male) 
+summary(model.final)
+
+#manually add the SmokeNow variable in
+model.final.smoke <- lm(BPSysAve ~ Age + as.factor(SmokeNow), data = train.male) 
+summary(model.final.smoke)
+```
+The cross-validation shows best for BIC, we can fit that model for comparison too. 
+```{r}
+model.final2 <- lm(BPSysAve ~ Age + Height, data = train.male) 
+summary(model.final2)
+
+model.final2.smoke <- lm(BPSysAve ~ Age + Height + as.factor(SmokeNow), data = train.male) 
+summary(model.final2.smoke)
+```
+
+```{r}
+#Check Assumptions again 
+#Diagnosis Plots by R of full model
+par(mfrow = c(2, 2))
+plot(model.final)
+
+par(mfrow = c(2, 2))
+plot(model.final2)
+```
+
+
+We now fit it on females:
+```{r}
+################Stepwise Selection######################## 
+## Based on AIC ##
+model.step <- lm(BPSysAve ~ Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.female) #include all variables in data except the firstcol and second col
+n <- nrow(train.female)
+sel.var.aic <- step(model.step, trace = 0, k = 2, direction = "both")
+select_var.aic<-attr(terms(sel.var.aic), "term.labels")   
+select_var.aic
+
+
+## Based on BIC ##
+model.step <- lm(BPSysAve ~ Age +  Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + Depressed + BMI + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.female)
+n <- nrow(train.female)
+sel.var.bic <- step(model.step, trace = 0, k = log(n), direction = "both")
+select_var.bic<-attr(terms(sel.var.bic), "term.labels")   
+select_var.bic
+```
+
+```{r}
+############# LASSO selection for variable selection ###########3##
+
+## Perform cross validation to choose lambda ##
+set.seed(1005825136) #for cross validation so that don't come up with different lamdas
+cv.out <- cv.glmnet(x = model.matrix(~ Age +  Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.female), y = train.female$BPSysAve, standardize = T, alpha = 1)
+plot(cv.out)
+best.lambda <- cv.out$lambda.1se #get best lamda
+best.lambda
+co<-coef(cv.out, s = "lambda.1se") #gives the summary of the variables included in the model with lasso selection
+
+#Selection of the significant features(predictors)
+
+## threshold for variable selection ##
+thresh <- 0.0
+# select variables #
+inds<-which(abs(co) > thresh )
+variables<-row.names(co)[inds]
+sel.var.lasso<-variables[!(variables %in% '(Intercept)')]
+sel.var.lasso #selected variable names from co using lasso selection
+```
+
+
+## Shrinkage Methods & Prediction Error
+```{r}
+################Full Model######################## 
+model.full <- lm(BPSysAve ~ ., data = train.female[, -c(1,2)])
+summary(model.full)
+## Prediction error ##
+pred.y <- predict(model.full, newdata = test.female, type = "response")
+pred.error.full<- mean((test.female$BPSysAve - pred.y)^2)
+pred.error.full
+
+################Selected Model Prior to Variable Selection######################## 
+model.select <- lm(BPSysAve ~ Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.female)
+summary(model.select)
+## Prediction error ##
+pred.y <- predict(model.select, newdata = test.female, type = "response")
+mean((test.female$BPSysAve - pred.y)^2)
+
+```
+
+```{r}
+################Ridge########################
+#alpha = 0 means ridge penalty
+model.ridge <- glmnet(x = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.female), y = train.female$BPSysAve, standardize = T, alpha = 0) 
+
+## Perform Prediction ##
+pred.y.ridge <- predict(model.ridge, newx = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test.female), type = "response")
+
+## Prediction error ##
+pred.error.ridge <- mean((test.female$BPSysAve - pred.y.ridge)^2)
+pred.error.ridge
+```
+
+```{r}
+################LASSO########################
+model.lasso <- glmnet(x = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.female), y = train.female$BPSysAve, standardize = T, alpha = 1) 
+
+## Perform Prediction ##
+pred.y.lasso <- predict(model.lasso, newx = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test.female), type = "response")
+
+## Prediction error ##
+pred.error.lasso <- mean((test.female$BPSysAve - pred.y.lasso)^2) #lowest prediction error
+pred.error.lasso
+```
+
+```{r}
+################Elastic Net########################
+model.EN <- glmnet(x = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.female), y = train.female$BPSysAve, standardize = T, alpha = 0.5) 
+
+## Perform Prediction ##
+pred.y.EN <- predict(model.EN, newx = model.matrix(~Age + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, test.female), type = "response")
+
+## Prediction error ##
+pred.error.en <- mean((test.female$BPSysAve - pred.y.EN)^2)
+pred.error.en
+```
+Prediction Error lowest for Elastic Net model so far.
+
+
+## Model Validation & Prediction Error
+```{r}
+### Cross Validation and prediction performance of AIC based selection ###
+ols.aic <- ols(BPSysAve ~ ., data = train.female[,which(colnames(train.female) %in% c(select_var.aic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+aic.cross <- calibrate(ols.aic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(aic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with AIC")
+
+## Test Error ##
+pred.aic <- predict(ols.aic, newdata = test.female[,which(colnames(train.female) %in% c(select_var.aic, "BPSysAve"))])
+## Prediction error ##
+pred.error.AIC <- mean((test.female$BPSysAve - pred.aic)^2)
+pred.error.AIC
+```
+Predicted pretty well.
+
+```{r}
+### Cross Validation and prediction performance of BIC based selection ###
+ols.bic <- ols(BPSysAve ~ ., data = train.female[,which(colnames(train.female) %in% c(select_var.bic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+bic.cross <- calibrate(ols.bic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(bic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with BIC")
+
+## Test Error ##
+pred.bic <- predict(ols.bic, newdata = test.female[,which(colnames(train.female) %in% c(select_var.bic, "BPSysAve"))])
+## Prediction error ##
+pred.error.BIC <- mean((test.female$BPSysAve - pred.bic)^2)
+pred.error.BIC
+
+```
+Have approximately the same predictive power in model validation as the one with AIC.
+
+```{r}
+### Cross Validation and prediction performance of lasso based selection ###
+ols.lasso <- ols(BPSysAve ~ ., data = train.female[,which(colnames(train.female) %in% c(sel.var.lasso, "BPSysAve"))], 
+                 x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+lasso.cross <- calibrate(ols.lasso, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(lasso.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with LASSO")
+
+## Test Error ##
+pred.lasso <- predict(ols.lasso, newdata = test.female[,which(colnames(train.female) %in% c(sel.var.lasso, "BPSysAve"))])
+## Prediction error ##
+pred.error.lasso <- mean((test.female$BPSysAve - pred.lasso)^2)
+pred.error.lasso
+
+print(c(pred.error.AIC, pred.error.BIC, pred.error.lasso))
+
+```
+
+```{r}
+string <- "All Predictors except ID"
+tab <- matrix(c(toString(select_var.aic), pred.error.AIC, toString(select_var.bic), pred.error.BIC, toString(sel.var.lasso), pred.error.lasso, string, pred.error.full), ncol=2, byrow=TRUE) 
+colnames(tab) <- c('Selected Variables', 'Prediction Error') 
+rownames(tab) <- c("Stepwise Selection by AIC", "Stepwise Selection by BIC", "LASSO", "Full Model")
+tab <- as.table(tab)
+tab
+
+```
+```{r}
+tab <- matrix(c(pred.error.ridge, pred.error.lasso, pred.error.en), ncol=1, byrow=TRUE) 
+colnames(tab) <- c('Prediction Error') 
+rownames(tab) <- c("Ridge", "LASSO", "Elastic Net (alpha = 0.5)")
+tab <- as.table(tab)
+tab
+
+```
+
+```{r}
+model.final <- lm(BPSysAve ~ Age, data = train.female) 
+summary(model.final)
+
+#manually add the SmokeNow variable in
+model.final.smoke <- lm(BPSysAve ~ Age + as.factor(SmokeNow), data = train.female) 
+summary(model.final.smoke)
+```
+
+The cross-validation shows best for BIC, we can fit that model for comparison too. 
+```{r}
+model.final2 <- lm(BPSysAve ~ Age + Height, data = train.female) 
+summary(model.final2)
+
+model.final2.smoke <- lm(BPSysAve ~ Age + Height + as.factor(SmokeNow), data = train.female) 
+summary(model.final2.smoke)
+```
+
+```{r}
+#Check Assumptions again 
+#Diagnosis Plots by R of full model
+par(mfrow = c(2, 2))
+plot(model.final)
+
+par(mfrow = c(2, 2))
+plot(model.final2)
+```
+
+
+## Try fit simple linear regression
+```{r}
+model <- lm(BPSysAve ~ as.factor(SmokeNow), data = train)
+summary(model)
+```
+
+## fEMALE OBESE
+```{r}
+train.male.obese <- filter(train.male, BMI >= 25)
+train.female.obese <- filter(train.female, BMI >= 25)
+
+test.male.obese <- filter(test.male, BMI >= 25)
+test.female.obese <- filter(test.female, BMI >= 25)
+```
+
+```{r}
+model <- lm(BPSysAve~as.factor(SmokeNow), data = train.female.obese)
+summary(model)
+
+pred.full <- predict(model, newdata = test.female.obese)
+pred.error.full <- mean((test.female.obese$BPSysAve - pred.lasso)^2)
+pred.error.full
+
+model <- lm(BPSysAve~Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + BMI + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.female.obese)
+summary(model)
+
+pred.full <- predict(model, newdata = test.female.obese)
+pred.error.full <- mean((test.female.obese$BPSysAve - pred.lasso)^2)
+pred.error.full
+```
+```{r}
+################Stepwise Selection######################## 
+## Based on AIC ##
+model.step <- lm(BPSysAve ~ Age + Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.female.obese) #include all variables in data except the firstcol and second col
+n <- nrow(train.female.obese)
+sel.var.aic <- step(model.step, trace = 0, k = 2, direction = "both")
+select_var.aic<-attr(terms(sel.var.aic), "term.labels")   
+select_var.aic
+
+
+## Based on BIC ##
+model.step <- lm(BPSysAve ~ Age +  Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, data = train.female.obese)
+n <- nrow(train.female.obese)
+sel.var.bic <- step(model.step, trace = 0, k = log(n), direction = "both")
+select_var.bic<-attr(terms(sel.var.bic), "term.labels")   
+select_var.bic
+```
+
+```{r}
+############# LASSO selection for variable selection ###########3##
+
+## Perform cross validation to choose lambda ##
+set.seed(1005825136) #for cross validation so that don't come up with different lamdas
+cv.out <- cv.glmnet(x = model.matrix(~ Age +  Race3 + Education + MaritalStatus + HHIncome + Poverty + Weight + Height + Depressed + SleepHrsNight + SleepTrouble + PhysActive + SmokeNow, train.female.obese), y = train.female.obese$BPSysAve, standardize = T, alpha = 1)
+plot(cv.out)
+best.lambda <- cv.out$lambda.1se #get best lamda
+best.lambda
+co<-coef(cv.out, s = "lambda.1se") #gives the summary of the variables included in the model with lasso selection
+
+#Selection of the significant features(predictors)
+
+## threshold for variable selection ##
+thresh <- 0.0
+# select variables #
+inds<-which(abs(co) > thresh )
+variables<-row.names(co)[inds]
+sel.var.lasso<-variables[!(variables %in% '(Intercept)')]
+sel.var.lasso #selected variable names from co using lasso selection
+```
+```{r}
+### Cross Validation and prediction performance of AIC based selection ###
+ols.aic <- ols(BPSysAve ~ ., data = train.female.obese[,which(colnames(train.female.obese) %in% c(select_var.aic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+aic.cross <- calibrate(ols.aic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(aic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with AIC")
+
+## Test Error ##
+pred.aic <- predict(ols.aic, newdata = test.female.obese[,which(colnames(train.female.obese) %in% c(select_var.aic, "BPSysAve"))])
+## Prediction error ##
+pred.error.AIC <- mean((test.female.obese$BPSysAve - pred.aic)^2)
+pred.error.AIC
+```
+Predicted pretty well.
+
+```{r}
+### Cross Validation and prediction performance of BIC based selection ###
+ols.bic <- ols(BPSysAve ~ ., data = train.female.obese[,which(colnames(train.female.obese) %in% c(select_var.bic, "BPSysAve"))], 
+               x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+bic.cross <- calibrate(ols.bic, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(bic.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with BIC")
+
+## Test Error ##
+pred.bic <- predict(ols.bic, newdata = test.female.obese[,which(colnames(train.female.obese) %in% c(select_var.bic, "BPSysAve"))])
+## Prediction error ##
+pred.error.BIC <- mean((test.female.obese$BPSysAve - pred.bic)^2)
+pred.error.BIC
+
+```
+
+```{r}
+### Cross Validation and prediction performance of lasso based selection ###
+ols.lasso <- ols(BPSysAve ~ ., data = train.female.obese[,which(colnames(train.female.obese) %in% c(sel.var.lasso, "BPSysAve"))], 
+                 x=T, y=T, model = T)
+
+## 10 fold cross validation ##    
+lasso.cross <- calibrate(ols.lasso, method = "crossvalidation", B = 10)
+## Calibration plot ##
+plot(lasso.cross, las = 1, xlab = "Predicted BPSysAve", main = "Cross-Validation calibration with LASSO")
+
+## Test Error ##
+pred.lasso <- predict(ols.lasso, newdata = test.female.obese[,which(colnames(train.female.obese) %in% c(sel.var.lasso, "BPSysAve"))])
+## Prediction error ##
+pred.error.lasso <- mean((test.female.obese$BPSysAve - pred.lasso)^2)
+pred.error.lasso
+
+print(c(pred.error.AIC, pred.error.BIC, pred.error.lasso))
+
+```
+The cross validation and prediction error best for AIC.
+The cross-validation shows best for BIC, we can fit that model for comparison too. 
+```{r}
+model.final <- lm(BPSysAve ~ Age + Poverty + Depressed + SmokeNow, data = train.female.obese) 
+summary(model.final)
+
+```
+
+```{r}
+#Check Assumptions again 
+#Diagnosis Plots by R of full model
+par(mfrow = c(2, 2))
+plot(model.final)
+```
+
+## Play around
+```{r}
+train.male.thin <- filter(train.male, BMI <= 24.9)
+train.female.thin <- filter(train.female, BMI <= 24.9)
+
+test.male.thin <- filter(test.male, BMI <= 24.9)
+test.female.thin <- filter(test.female, BMI <= 24.9)
+```
+
+```{r}
+model <- lm(BPSysAve~ ., data = train.female.thin[, -c(1,2,11)])
+summary(model)
+```
+
+
