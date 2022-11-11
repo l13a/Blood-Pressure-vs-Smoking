@@ -1,10 +1,9 @@
 # Smoking v.s. Blood Pressure
 
-## Correlation analysis of what factors influence combined systolic blood pressure. Put an emphasis on the effects of smoking on blood pressure.
+## Correlation analysis of what factors influence combined systolic blood pressure. I placed an emphasis on the effects of smoking on blood pressure.
 
 ## Presentation Link
-
-
+https://youtu.be/s9u3FVuF33E
 
 ## Data
 Analysis of a subset of the NHANES dataset on what factors influence combined systolic blood pressure
